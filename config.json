@@ -1,0 +1,21 @@
+{
+  "tasks": [
+    {
+      "id": "d78232c1",
+      "name": "adnan",
+      "task_type": "File Copy",
+      "source": "C:/Users/ADNAN/OneDrive/Desktop/adnan.txt",
+      "destination": "C:/Users/ADNAN/OneDrive/Desktop/invoice ksa",
+      "schedule_type": "Once",
+      "time_hour": "11",
+      "time_minute": "43",
+      "time_ampm": "PM",
+      "weekly_days": [
+        "Mon"
+      ],
+      "interval_minutes": 30,
+      "versioned": true,
+      "enabled": false
+    }
+  ]
+}

@@ -1,26 +1,32 @@
-# Task Scheduler
+# Advanced Task Scheduler
 
-A desktop application to schedule daily **file copy** and **folder backup** operations at a specific time.
+A powerful desktop application to schedule and automate **file copy** and **folder backup** operations.
 
 Built with **Python** and **Tkinter**.
 
-![Screenshot](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+![Python](https://img.shields.io/badge/Python-3.9+-blue) ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green)
 
 ---
 
-## Features
+## ✨ Features
 
-- 📁 **File Copy** — Copy a single file to a destination folder on a daily schedule
-- 📂 **Folder Backup** — Recursively back up an entire directory daily
-- ⏰ **12-hour Time Picker** — Set the schedule time with AM/PM selection
-- 📋 **Task History Log** — See timestamped results of past executions in the UI
-- 🛑 **Stop / Cancel** — Stop a scheduled task at any time
-- 📝 **File Logging** — All activity is logged to `scheduler.log`
-- ✅ **Input Validation** — Paths and times are validated before scheduling
+| Feature | Description |
+|---------|-------------|
+| 📋 **Multiple Task Queue** | Create, edit, delete, and manage multiple scheduled tasks |
+| 💾 **Config Persistence** | Tasks auto-save to `config.json` and reload on startup |
+| 🔁 **Repeat Options** | Once, Daily, Hourly, Weekly (pick days), Every X Minutes |
+| 🔽 **System Tray** | Minimize to system tray — runs quietly in the background |
+| 📁 **Versioned Backups** | Timestamped folders (e.g. `Documents_2026-04-20_23-15-00/`) |
+| 🔔 **Desktop Notifications** | Native toast notifications on task success/failure |
+| 💿 **Disk Space Check** | Verifies free space before copying |
+| 🖱️ **Drag & Drop** | Drop files/folders directly onto input fields |
+| 📝 **Task History Log** | Timestamped in-app log of all events |
+| 🔒 **Input Validation** | Path existence, time ranges, disk space checks |
+| 📄 **File Logging** | All activity logged to `scheduler.log` |
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### 1. Install dependencies
 
@@ -36,24 +42,34 @@ python task_scheduler.py
 
 ---
 
-## How It Works
+## 📖 How to Use
 
-1. Select an operation (**File Copy** or **Folder Backup**)
-2. Browse for a **source** file or folder
-3. Browse for a **destination** folder
-4. Set the **time** (hours, minutes, AM/PM)
-5. Click **START AUTOMATION** — the task will run daily at the scheduled time
-6. Click **STOP ALL** to cancel
+1. Click **➕ Add Task** to create a new scheduled task
+2. Fill in: name, operation type, source, destination, schedule, and time
+3. Optionally enable **Versioned Backups** for timestamped copies
+4. The task appears in the task table
+5. **Right-click** a task for options: Run Now, Edit, Enable/Disable, Delete
+6. Click **🔽 Tray** to minimize to system tray
+7. All tasks auto-save and reload when you restart the app
 
-The scheduler runs in a background thread so the UI stays responsive. Logs are saved to `scheduler.log` in the same directory.
+### Schedule Types
+
+| Type | Behavior |
+|------|----------|
+| **Once** | Runs once at the specified time, then auto-disables |
+| **Daily** | Runs every day at the specified time |
+| **Hourly** | Runs every hour |
+| **Weekly** | Runs on selected days at the specified time |
+| **Every X Minutes** | Runs at a custom interval (e.g. every 30 minutes) |
 
 ---
 
-## Project Structure
+## 📂 Project Structure
 
 ```
-project/
-├── task_scheduler.py   # Main application
+├── task_scheduler.py   # Main application (~600 lines)
+├── config.json         # Auto-generated task storage
+├── scheduler.log       # Activity log
 ├── requirements.txt    # Python dependencies
 ├── .gitignore          # Git ignore rules
 └── README.md           # This file
@@ -61,11 +77,24 @@ project/
 
 ---
 
-## Requirements
+## 🔧 Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `schedule` | Job scheduling engine |
+| `pystray` | System tray icon (optional) |
+| `Pillow` | Icon generation for tray |
+| `plyer` | Desktop toast notifications (optional) |
+| `tkinterdnd2` | Drag & drop support (optional) |
+
+> **Note:** `pystray`, `plyer`, and `tkinterdnd2` are optional — the app gracefully falls back if any are missing.
+
+---
+
+## 📋 Requirements
 
 - Python 3.9+
-- Tkinter (included with standard Python on Windows/macOS)
-- `schedule` library
+- Tkinter (included with Python on Windows/macOS)
 
 ---
 
