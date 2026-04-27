@@ -1,4 +1,5 @@
 {
+  "theme": "dark",
   "tasks": [
     {
       "id": "d78232c1",
@@ -14,7 +15,22 @@
         "Mon"
       ],
       "interval_minutes": 30,
-      "versioned": true,
+      "enabled": false
+    },
+    {
+      "id": "bb951a1d",
+      "name": "task 1",
+      "task_type": "File Copy",
+      "source": "C:/Users/ADNAN/OneDrive/Desktop/Lab 6- CVE Vulnerability Detection and Analysis using Wazuh SIEM.pdf",
+      "destination": "C:/Users/ADNAN/OneDrive/Desktop/ia labes",
+      "schedule_type": "Once",
+      "time_hour": "11",
+      "time_minute": "41",
+      "time_ampm": "PM",
+      "weekly_days": [
+        "Mon"
+      ],
+      "interval_minutes": 30,
       "enabled": false
     }
   ]

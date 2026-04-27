@@ -1,6 +1,6 @@
 # Advanced Task Scheduler
 
-A powerful desktop application to schedule and automate **file copy** and **folder backup** operations.
+A powerful desktop application to schedule and automate **file operations**, **commands**, and **backups**.
 
 Built with **Python** and **Tkinter**.
 
@@ -15,14 +15,24 @@ Built with **Python** and **Tkinter**.
 | 📋 **Multiple Task Queue** | Create, edit, delete, and manage multiple scheduled tasks |
 | 💾 **Config Persistence** | Tasks auto-save to `config.json` and reload on startup |
 | 🔁 **Repeat Options** | Once, Daily, Hourly, Weekly (pick days), Every X Minutes |
-| 🔽 **System Tray** | Minimize to system tray — runs quietly in the background |
-| 📁 **Versioned Backups** | Timestamped folders (e.g. `Documents_2026-04-20_23-15-00/`) |
+| ⏯ **Pause / Resume** | Per-task pause and resume controls (toolbar + right-click) |
+| 🎨 **Dark / Light Theme** | Toggle between dark and light UI themes |
 | 🔔 **Desktop Notifications** | Native toast notifications on task success/failure |
 | 💿 **Disk Space Check** | Verifies free space before copying |
 | 🖱️ **Drag & Drop** | Drop files/folders directly onto input fields |
 | 📝 **Task History Log** | Timestamped in-app log of all events |
 | 🔒 **Input Validation** | Path existence, time ranges, disk space checks |
 | 📄 **File Logging** | All activity logged to `scheduler.log` |
+
+### Operations
+
+| Operation | Description |
+|-----------|-------------|
+| 📄 **File Copy** | Copy a file to a destination folder |
+| 📁 **Folder Backup** | Back up an entire folder (timestamped) |
+| 📦 **Move File** | Move a file to a new location |
+| ⚡ **Run Command** | Execute any shell command or script |
+| 🗜️ **Zip Archive** | Compress a folder into a `.zip` file |
 
 ---
 
@@ -45,12 +55,13 @@ python task_scheduler.py
 ## 📖 How to Use
 
 1. Click **➕ Add Task** to create a new scheduled task
-2. Fill in: name, operation type, source, destination, schedule, and time
-3. Optionally enable **Versioned Backups** for timestamped copies
-4. The task appears in the task table
-5. **Right-click** a task for options: Run Now, Edit, Enable/Disable, Delete
-6. Click **🔽 Tray** to minimize to system tray
-7. All tasks auto-save and reload when you restart the app
+2. Choose an **operation** (File Copy, Folder Backup, Move File, Run Command, Zip Archive)
+3. Fill in the source, destination, schedule, and time
+4. The task appears in the task table with its status
+5. **Right-click** a task for options: Run Now, Edit, Pause/Resume, Delete
+6. Use **⏯ Pause / Resume** in the toolbar to control individual tasks
+7. Click **☀️ Light / 🌙 Dark** to toggle the theme
+8. All tasks auto-save and reload when you restart the app
 
 ### Schedule Types
 
@@ -67,7 +78,7 @@ python task_scheduler.py
 ## 📂 Project Structure
 
 ```
-├── task_scheduler.py   # Main application (~600 lines)
+├── task_scheduler.py   # Main application
 ├── config.json         # Auto-generated task storage
 ├── scheduler.log       # Activity log
 ├── requirements.txt    # Python dependencies
@@ -82,12 +93,10 @@ python task_scheduler.py
 | Package | Purpose |
 |---------|---------|
 | `schedule` | Job scheduling engine |
-| `pystray` | System tray icon (optional) |
-| `Pillow` | Icon generation for tray |
 | `plyer` | Desktop toast notifications (optional) |
 | `tkinterdnd2` | Drag & drop support (optional) |
 
-> **Note:** `pystray`, `plyer`, and `tkinterdnd2` are optional — the app gracefully falls back if any are missing.
+> **Note:** `plyer` and `tkinterdnd2` are optional — the app gracefully falls back if they are missing.
 
 ---
 

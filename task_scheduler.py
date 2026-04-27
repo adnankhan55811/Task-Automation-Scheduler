@@ -3,12 +3,13 @@ Advanced Task Scheduler — A full-featured desktop task automation tool.
 
 Features:
   - Multiple task queue with add / edit / delete / run-now
+  - Operations: File Copy, Folder Backup, Move File
   - Repeat options: Once, Hourly, Daily, Weekly, Every X Minutes
-  - System tray minimize (pystray)
-  - Versioned backups with timestamps
-  - Desktop toast notifications (plyer)
+  - Dark / Light theme toggle
   - Disk space check before copy
   - Drag & drop files/folders onto entry fields (tkinterdnd2)
+  - Config persistence (config.json)
+  - Desktop toast notifications (plyer)
   - Thread-safe UI, file logging, input validation
 """
 
@@ -16,14 +17,15 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import shutil
 import os
-
+import json
 import uuid
 import schedule
 import time
 import threading
 import logging
+
 from datetime import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 # --- Optional imports (graceful fallback) ---
@@ -39,17 +41,11 @@ try:
 except ImportError:
     HAS_PLYER = False
 
-try:
-    import pystray
-    from PIL import Image, ImageDraw, ImageFont
-    HAS_TRAY = True
-except ImportError:
-    HAS_TRAY = False
-
 # ---------------------------------------------------------------------------
 #                              LOGGING
 # ---------------------------------------------------------------------------
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scheduler.log")
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.INFO,
@@ -58,12 +54,59 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-#                            COLOUR PALETTE
+#                            THEME SYSTEM
 # ---------------------------------------------------------------------------
+
+THEMES = {
+    "dark": {
+        "BG": "#0F1923",
+        "SURFACE": "#1A2735",
+        "CARD": "#213243",
+        "PRIMARY": "#00E676",
+        "PRIMARY_DK": "#00C853",
+        "DANGER": "#FF5252",
+        "DANGER_DK": "#D32F2F",
+        "ACCENT": "#448AFF",
+        "ACCENT_DK": "#2979FF",
+        "AMBER": "#FFD740",
+        "TEXT": "#ECEFF1",
+        "TEXT_SEC": "#78909C",
+        "ENTRY_BG": "#263545",
+        "ENTRY_FG": "#ECEFF1",
+        "LOG_BG": "#0D1520",
+        "TREEVIEW_BG": "#162230",
+        "TREEVIEW_FG": "#CFD8DC",
+        "TREEVIEW_SEL": "#1B3A4D",
+        "HEADER_BG": "#1E3045",
+    },
+    "light": {
+        "BG": "#EFF1F5",
+        "SURFACE": "#FFFFFF",
+        "CARD": "#FFFFFF",
+        "PRIMARY": "#00C853",
+        "PRIMARY_DK": "#009624",
+        "DANGER": "#E53935",
+        "DANGER_DK": "#C62828",
+        "ACCENT": "#1E88E5",
+        "ACCENT_DK": "#1565C0",
+        "AMBER": "#E65100",
+        "TEXT": "#1A1A2E",
+        "TEXT_SEC": "#546E7A",
+        "ENTRY_BG": "#DEE2E8",
+        "ENTRY_FG": "#1A1A2E",
+        "LOG_BG": "#F5F7FA",
+        "TREEVIEW_BG": "#FFFFFF",
+        "TREEVIEW_FG": "#37474F",
+        "TREEVIEW_SEL": "#BBDEFB",
+        "HEADER_BG": "#E3F2FD",
+    },
+}
+
+# Active colour variables — initialised from the dark theme.
 BG          = "#0F1923"
 SURFACE     = "#1A2735"
 CARD        = "#213243"
-PRIMARY     = "#00E676"   # Green
+PRIMARY     = "#00E676"
 PRIMARY_DK  = "#00C853"
 DANGER      = "#FF5252"
 DANGER_DK   = "#D32F2F"
@@ -80,12 +123,42 @@ TREEVIEW_FG = "#CFD8DC"
 TREEVIEW_SEL = "#1B3A4D"
 HEADER_BG   = "#1E3045"
 
+
+def _apply_global_theme(name: str):
+    """Update all module-level colour variables to match the given theme."""
+    global BG, SURFACE, CARD, PRIMARY, PRIMARY_DK, DANGER, DANGER_DK
+    global ACCENT, ACCENT_DK, AMBER, TEXT, TEXT_SEC
+    global ENTRY_BG, ENTRY_FG, LOG_BG, TREEVIEW_BG, TREEVIEW_FG
+    global TREEVIEW_SEL, HEADER_BG
+
+    t = THEMES.get(name, THEMES["dark"])
+    BG          = t["BG"]
+    SURFACE     = t["SURFACE"]
+    CARD        = t["CARD"]
+    PRIMARY     = t["PRIMARY"]
+    PRIMARY_DK  = t["PRIMARY_DK"]
+    DANGER      = t["DANGER"]
+    DANGER_DK   = t["DANGER_DK"]
+    ACCENT      = t["ACCENT"]
+    ACCENT_DK   = t["ACCENT_DK"]
+    AMBER       = t["AMBER"]
+    TEXT        = t["TEXT"]
+    TEXT_SEC    = t["TEXT_SEC"]
+    ENTRY_BG    = t["ENTRY_BG"]
+    ENTRY_FG    = t["ENTRY_FG"]
+    LOG_BG      = t["LOG_BG"]
+    TREEVIEW_BG = t["TREEVIEW_BG"]
+    TREEVIEW_FG = t["TREEVIEW_FG"]
+    TREEVIEW_SEL = t["TREEVIEW_SEL"]
+    HEADER_BG   = t["HEADER_BG"]
+
+
 # ---------------------------------------------------------------------------
 #                           CONSTANTS
 # ---------------------------------------------------------------------------
 
 SCHEDULE_TYPES = ["Once", "Daily", "Hourly", "Weekly", "Every X Minutes"]
-TASK_TYPES = ["File Copy", "Folder Backup"]
+TASK_TYPES = ["File Copy", "Folder Backup", "Move File"]
 WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 WEEKDAY_MAP = {
     "Mon": "monday", "Tue": "tuesday", "Wed": "wednesday",
@@ -109,8 +182,7 @@ class TaskConfig:
     time_ampm: str = "AM"
     weekly_days: list = field(default_factory=lambda: ["Mon"])
     interval_minutes: int = 30
-    versioned: bool = False
-    enabled: bool = True
+    enabled: bool = True  # False = paused
 
     def __post_init__(self):
         if not self.id:
@@ -134,9 +206,6 @@ class TaskConfig:
         time_input = f"{self.time_hour}:{self.time_minute} {self.time_ampm}"
         t_struct = time.strptime(time_input, "%I:%M %p")
         return time.strftime("%H:%M", t_struct)
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +232,7 @@ def check_disk_space(source: str, dest: str, is_file: bool) -> tuple:
         usage = shutil.disk_usage(dest)
         return usage.free >= needed, needed, usage.free
     except Exception:
-        return True, 0, 0  # If we can't check, proceed anyway
+        return True, 0, 0
 
 
 def format_bytes(size: int) -> str:
@@ -187,20 +256,6 @@ def send_notification(title: str, message: str):
             logger.warning(f"Notification failed: {e}")
 
 
-def create_tray_icon_image():
-    """Programmatically create a 64×64 tray icon."""
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    # Circle background
-    draw.ellipse([4, 4, 60, 60], fill="#00E676")
-    # Clock hands
-    draw.line([32, 32, 32, 14], fill="white", width=3)
-    draw.line([32, 32, 44, 32], fill="white", width=3)
-    # Center dot
-    draw.ellipse([29, 29, 35, 35], fill="white")
-    return img
-
-
 # ---------------------------------------------------------------------------
 #                     ADD / EDIT TASK DIALOG
 # ---------------------------------------------------------------------------
@@ -212,10 +267,9 @@ class TaskDialog:
         self.result: Optional[TaskConfig] = None
         self.task = task or TaskConfig()
 
-        # Create toplevel
         self.win = tk.Toplevel(parent)
         self.win.title(title)
-        self.win.geometry("500x620")
+        self.win.geometry("500x560")
         self.win.configure(bg=BG)
         self.win.resizable(False, False)
         self.win.transient(parent)
@@ -226,8 +280,6 @@ class TaskDialog:
         parent.wait_window(self.win)
 
     def _build(self):
-        pad = {"padx": 20, "pady": (8, 0)}
-
         # Title
         tk.Label(self.win, text="📝", font=("Segoe UI Emoji", 18), bg=BG, fg=TEXT
                  ).pack(pady=(18, 0))
@@ -242,17 +294,21 @@ class TaskDialog:
         # Operation
         self._label(frame, "Operation:")
         self.type_var = tk.StringVar(value=self.task.task_type)
-        type_menu = tk.OptionMenu(frame, self.type_var, *TASK_TYPES)
+        type_menu = tk.OptionMenu(frame, self.type_var, *TASK_TYPES,
+                                  command=self._on_type_change)
         self._style_menu(type_menu)
         type_menu.pack(fill="x", pady=3)
 
         # Source
-        self._label(frame, "Source Path:")
+        self.src_label = tk.Label(frame, text="Source Path:", font=("Arial", 9, "bold"),
+                                  bg=CARD, fg=TEXT)
+        self.src_label.pack(anchor="w", pady=(8, 0))
         src_frame = tk.Frame(frame, bg=CARD)
         src_frame.pack(fill="x", pady=3)
         self.src_entry = self._entry(src_frame, pack=False)
         self.src_entry.pack(side="left", fill="x", expand=True, ipady=4)
-        self._small_btn(src_frame, "Browse", self._browse_src).pack(side="right", padx=(6, 0))
+        self.src_browse_btn = self._small_btn(src_frame, "Browse", self._browse_src)
+        self.src_browse_btn.pack(side="right", padx=(6, 0))
 
         # Enable drag & drop on source entry
         if HAS_DND:
@@ -260,12 +316,15 @@ class TaskDialog:
             self.src_entry.dnd_bind("<<Drop>>", lambda e: self._on_drop(e, self.src_entry))
 
         # Destination
-        self._label(frame, "Destination Path:")
-        dest_frame = tk.Frame(frame, bg=CARD)
-        dest_frame.pack(fill="x", pady=3)
-        self.dest_entry = self._entry(dest_frame, pack=False)
+        self.dest_label = tk.Label(frame, text="Destination Path:", font=("Arial", 9, "bold"),
+                                   bg=CARD, fg=TEXT)
+        self.dest_label.pack(anchor="w", pady=(8, 0))
+        self.dest_frame = tk.Frame(frame, bg=CARD)
+        self.dest_frame.pack(fill="x", pady=3)
+        self.dest_entry = self._entry(self.dest_frame, pack=False)
         self.dest_entry.pack(side="left", fill="x", expand=True, ipady=4)
-        self._small_btn(dest_frame, "Browse", self._browse_dest).pack(side="right", padx=(6, 0))
+        self.dest_browse_btn = self._small_btn(self.dest_frame, "Browse", self._browse_dest)
+        self.dest_browse_btn.pack(side="right", padx=(6, 0))
 
         if HAS_DND:
             self.dest_entry.drop_target_register(DND_FILES)
@@ -326,14 +385,6 @@ class TaskDialog:
         tk.Label(self.interval_frame, text="minutes", font=("Arial", 9),
                  bg=CARD, fg=TEXT_SEC).pack(side="left")
 
-        # Versioned toggle
-        self.versioned_var = tk.BooleanVar(value=self.task.versioned)
-        tk.Checkbutton(frame, text="  Versioned Backups (timestamped folders)",
-                       variable=self.versioned_var, bg=CARD, fg=AMBER,
-                       selectcolor=ENTRY_BG, activebackground=CARD,
-                       activeforeground=AMBER, font=("Arial", 9, "bold")
-                       ).pack(anchor="w", pady=(10, 0))
-
         # Buttons
         btn_bar = tk.Frame(self.win, bg=BG)
         btn_bar.pack(pady=14)
@@ -342,6 +393,7 @@ class TaskDialog:
 
         # Show/hide conditional fields
         self._on_sched_change(self.sched_var.get())
+        self._on_type_change(self.type_var.get())
 
     def _populate(self):
         self.name_entry.insert(0, self.task.name)
@@ -351,20 +403,32 @@ class TaskDialog:
         self.min_e.insert(0, self.task.time_minute)
         self.interval_e.insert(0, str(self.task.interval_minutes))
 
+    def _on_type_change(self, val):
+        """Adapt field labels and visibility based on the selected operation type."""
+        if val == "Move File":
+            self.src_label.config(text="Source File:")
+            self.src_browse_btn.pack(side="right", padx=(6, 0))
+            self.dest_label.config(text="Move To Folder:")
+        elif val == "Folder Backup":
+            self.src_label.config(text="Source Folder:")
+            self.src_browse_btn.pack(side="right", padx=(6, 0))
+            self.dest_label.config(text="Backup To:")
+        else:  # File Copy
+            self.src_label.config(text="Source File:")
+            self.src_browse_btn.pack(side="right", padx=(6, 0))
+            self.dest_label.config(text="Copy To Folder:")
+
     def _on_sched_change(self, val):
-        # Time row: hide for "Hourly" and "Every X Minutes"
         if val in ("Hourly", "Every X Minutes"):
             self.time_frame.pack_forget()
         else:
             self.time_frame.pack(fill="x", pady=3)
 
-        # Days row: show only for "Weekly"
         if val == "Weekly":
             self.days_frame.pack(fill="x", pady=3)
         else:
             self.days_frame.pack_forget()
 
-        # Interval row: show only for "Every X Minutes"
         if val == "Every X Minutes":
             self.interval_frame.pack(fill="x", pady=3)
         else:
@@ -375,6 +439,7 @@ class TaskDialog:
         src = self.src_entry.get().strip()
         dest = self.dest_entry.get().strip()
         sched = self.sched_var.get()
+        task_type = self.type_var.get()
 
         # --- Validation ---
         if not name:
@@ -383,25 +448,30 @@ class TaskDialog:
         if not src:
             messagebox.showwarning("Validation", "Source path is required.", parent=self.win)
             return
+
         if not dest:
             messagebox.showwarning("Validation", "Destination path is required.", parent=self.win)
             return
+
         if not os.path.exists(src):
             messagebox.showwarning("Validation", f"Source does not exist:\n{src}", parent=self.win)
             return
-        if not os.path.isdir(dest):
-            messagebox.showwarning("Validation", f"Destination folder does not exist:\n{dest}", parent=self.win)
-            return
 
-        task_type = self.type_var.get()
-        if task_type == "File Copy" and not os.path.isfile(src):
+        if task_type == "File Copy" and src and os.path.exists(src) and not os.path.isfile(src):
             messagebox.showwarning("Validation", "Source must be a file for 'File Copy'.", parent=self.win)
             return
-        if task_type == "Folder Backup" and not os.path.isdir(src):
+        if task_type == "Move File" and src and os.path.exists(src) and not os.path.isfile(src):
+            messagebox.showwarning("Validation", "Source must be a file for 'Move File'.", parent=self.win)
+            return
+        if task_type == "Folder Backup" and src and os.path.exists(src) and not os.path.isdir(src):
             messagebox.showwarning("Validation", "Source must be a folder for 'Folder Backup'.", parent=self.win)
             return
 
-        # Time validation (skip for hourly / every-x-min)
+        if dest and not os.path.isdir(dest):
+            messagebox.showwarning("Validation", f"Destination folder does not exist:\n{dest}", parent=self.win)
+            return
+
+        # Time validation
         h_val, m_val = "12", "00"
         if sched not in ("Hourly", "Every X Minutes"):
             h_str = self.hour_e.get().strip()
@@ -436,7 +506,6 @@ class TaskDialog:
             messagebox.showwarning("Validation", "Select at least one day for Weekly schedule.", parent=self.win)
             return
 
-        # Build result
         self.result = TaskConfig(
             id=self.task.id,
             name=name,
@@ -449,7 +518,6 @@ class TaskDialog:
             time_ampm=self.ampm_var.get(),
             weekly_days=weekly,
             interval_minutes=interval,
-            versioned=self.versioned_var.get(),
             enabled=self.task.enabled,
         )
         self.win.destroy()
@@ -457,10 +525,11 @@ class TaskDialog:
     # ---- Browse / DnD helpers ----
 
     def _browse_src(self):
-        if self.type_var.get() == "File Copy":
-            path = filedialog.askopenfilename(parent=self.win)
-        else:
+        tt = self.type_var.get()
+        if tt == "Folder Backup":
             path = filedialog.askdirectory(parent=self.win)
+        else:
+            path = filedialog.askopenfilename(parent=self.win)
         if path:
             self.src_entry.delete(0, tk.END)
             self.src_entry.insert(0, path)
@@ -473,7 +542,6 @@ class TaskDialog:
 
     def _on_drop(self, event, entry_widget):
         path = event.data.strip()
-        # tkdnd wraps paths with spaces in braces
         if path.startswith("{") and path.endswith("}"):
             path = path[1:-1]
         entry_widget.delete(0, tk.END)
@@ -527,14 +595,13 @@ class TaskDialog:
 # ---------------------------------------------------------------------------
 
 class TaskSchedulerApp:
-    """Main application window with all 8 advanced features."""
+    """Main application window."""
 
     def __init__(self, root):
         self.root = root
         self.tasks: list[TaskConfig] = []
-        self.jobs: dict[str, list] = {}  # task_id -> [schedule.Job, ...]
-        self.tray_icon = None
-        self._hidden = False
+        self.jobs: dict[str, list] = {}   # task_id -> [schedule.Job, ...]
+        self.current_theme = "dark"
 
         self._build_ui()
         self._load_tasks()
@@ -547,62 +614,69 @@ class TaskSchedulerApp:
 
     def _build_ui(self):
         self.root.title("Task Scheduler")
-        self.root.geometry("680x780")
-        self.root.minsize(620, 700)
+        self.root.geometry("720x780")
+        self.root.minsize(660, 700)
         self.root.configure(bg=BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # ------- Title -------
-        hdr = tk.Frame(self.root, bg=SURFACE, pady=12)
-        hdr.pack(fill="x")
-        tk.Label(hdr, text="⏰", font=("Segoe UI Emoji", 22), bg=SURFACE, fg=TEXT
-                 ).pack(side="left", padx=(20, 8))
-        tk.Label(hdr, text="TASK SCHEDULER", font=("Helvetica", 18, "bold"),
-                 bg=SURFACE, fg=TEXT).pack(side="left")
+        self.hdr_frame = tk.Frame(self.root, bg=SURFACE, pady=12)
+        self.hdr_frame.pack(fill="x")
+        self.hdr_icon = tk.Label(self.hdr_frame, text="⏰",
+                                 font=("Segoe UI Emoji", 22), bg=SURFACE, fg=TEXT)
+        self.hdr_icon.pack(side="left", padx=(20, 8))
+        self.hdr_title = tk.Label(self.hdr_frame, text="TASK SCHEDULER",
+                                  font=("Helvetica", 18, "bold"), bg=SURFACE, fg=TEXT)
+        self.hdr_title.pack(side="left")
 
         # ------- Toolbar -------
-        tb = tk.Frame(self.root, bg=BG, pady=8)
-        tb.pack(fill="x", padx=16)
-        self._toolbar_btn(tb, "➕  Add Task", PRIMARY, PRIMARY_DK, self._add_task).pack(side="left", padx=4)
-        self._toolbar_btn(tb, "▶  Start All", ACCENT, ACCENT_DK, self._start_all).pack(side="left", padx=4)
-        self._toolbar_btn(tb, "■  Stop All", DANGER, DANGER_DK, self._stop_all).pack(side="left", padx=4)
-        if HAS_TRAY:
-            self._toolbar_btn(tb, "🔽  Tray", "#546E7A", "#455A64", self._minimize_to_tray
-                              ).pack(side="right", padx=4)
+        self.toolbar = tk.Frame(self.root, bg=BG, pady=8)
+        self.toolbar.pack(fill="x", padx=16)
+
+        self._toolbar_btn(self.toolbar, "➕  Add Task", PRIMARY, PRIMARY_DK,
+                          self._add_task).pack(side="left", padx=4)
+        self._toolbar_btn(self.toolbar, "▶  Start All", ACCENT, ACCENT_DK,
+                          self._start_all).pack(side="left", padx=4)
+        self._toolbar_btn(self.toolbar, "■  Stop All", DANGER, DANGER_DK,
+                          self._stop_all).pack(side="left", padx=4)
+
+
+        # Right-side: theme toggle
+        self.theme_btn = self._toolbar_btn(self.toolbar, "☀️  Light", "#546E7A", "#455A64",
+                                           self._toggle_theme)
+        self.theme_btn.pack(side="right", padx=4)
 
         # ------- Task Table (Treeview) -------
-        tree_frame = tk.Frame(self.root, bg=BG)
-        tree_frame.pack(fill="both", expand=True, padx=16, pady=(4, 0))
+        self.tree_frame = tk.Frame(self.root, bg=BG)
+        self.tree_frame.pack(fill="both", expand=True, padx=16, pady=(4, 0))
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Task.Treeview",
-                        background=TREEVIEW_BG, foreground=TREEVIEW_FG,
-                        fieldbackground=TREEVIEW_BG, rowheight=30,
-                        font=("Arial", 10))
-        style.configure("Task.Treeview.Heading",
-                        background=HEADER_BG, foreground=TEXT,
-                        font=("Arial", 10, "bold"), relief="flat")
-        style.map("Task.Treeview",
-                  background=[("selected", TREEVIEW_SEL)],
-                  foreground=[("selected", TEXT)])
+        self.style = ttk.Style()
+        self.style.theme_use("clam")
+        self.style.configure("Task.Treeview",
+                             background=TREEVIEW_BG, foreground=TREEVIEW_FG,
+                             fieldbackground=TREEVIEW_BG, rowheight=30,
+                             font=("Arial", 10))
+        self.style.configure("Task.Treeview.Heading",
+                             background=HEADER_BG, foreground=TEXT,
+                             font=("Arial", 10, "bold"), relief="flat")
+        self.style.map("Task.Treeview",
+                       background=[("selected", TREEVIEW_SEL)],
+                       foreground=[("selected", TEXT)])
 
-        cols = ("name", "type", "schedule", "versioned", "status")
-        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings",
+        cols = ("name", "type", "schedule", "status")
+        self.tree = ttk.Treeview(self.tree_frame, columns=cols, show="headings",
                                  style="Task.Treeview", selectmode="browse")
         self.tree.heading("name", text="Task Name")
-        self.tree.heading("type", text="Type")
+        self.tree.heading("type", text="Operation")
         self.tree.heading("schedule", text="Schedule")
-        self.tree.heading("versioned", text="Versioned")
         self.tree.heading("status", text="Status")
 
-        self.tree.column("name", width=160, minwidth=100)
-        self.tree.column("type", width=100, minwidth=80)
-        self.tree.column("schedule", width=200, minwidth=120)
-        self.tree.column("versioned", width=80, minwidth=60, anchor="center")
-        self.tree.column("status", width=80, minwidth=60, anchor="center")
+        self.tree.column("name", width=180, minwidth=120)
+        self.tree.column("type", width=120, minwidth=90)
+        self.tree.column("schedule", width=220, minwidth=140)
+        self.tree.column("status", width=100, minwidth=70, anchor="center")
 
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        vsb = ttk.Scrollbar(self.tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
@@ -621,27 +695,29 @@ class TaskSchedulerApp:
         self.tree.bind("<Double-1>", lambda e: self._edit_task())
 
         # ------- Task History Log -------
-        log_lbl = tk.Frame(self.root, bg=BG)
-        log_lbl.pack(fill="x", padx=16, pady=(8, 0))
-        tk.Label(log_lbl, text="Task History", font=("Arial", 10, "bold"),
-                 bg=BG, fg=TEXT_SEC).pack(anchor="w")
+        self.log_lbl_frame = tk.Frame(self.root, bg=BG)
+        self.log_lbl_frame.pack(fill="x", padx=16, pady=(8, 0))
+        self.log_lbl = tk.Label(self.log_lbl_frame, text="Task History",
+                                font=("Arial", 10, "bold"), bg=BG, fg=TEXT_SEC)
+        self.log_lbl.pack(anchor="w")
 
-        log_frame = tk.Frame(self.root, bg=LOG_BG, bd=0)
-        log_frame.pack(fill="x", padx=16, pady=(2, 8))
-        self.log_text = tk.Text(log_frame, height=7, bg=LOG_BG, fg=TEXT_SEC,
+        self.log_frame = tk.Frame(self.root, bg=LOG_BG, bd=0)
+        self.log_frame.pack(fill="x", padx=16, pady=(2, 8))
+        self.log_text = tk.Text(self.log_frame, height=7, bg=LOG_BG, fg=TEXT_SEC,
                                 font=("Consolas", 9), relief="flat", state="disabled",
                                 wrap="word", padx=8, pady=6)
         self.log_text.pack(fill="x")
 
         # ------- Status Bar -------
         self.status_var = tk.StringVar(value="Ready")
-        status_bar = tk.Frame(self.root, bg=SURFACE, pady=6)
-        status_bar.pack(fill="x", side="bottom")
-        tk.Label(status_bar, textvariable=self.status_var, font=("Arial", 9),
-                 bg=SURFACE, fg=AMBER).pack(side="left", padx=16)
-        tk.Label(status_bar, text="Built with Python & Tkinter",
-                 font=("Arial", 8, "italic"), bg=SURFACE, fg="#37474F"
-                 ).pack(side="right", padx=16)
+        self.status_bar = tk.Frame(self.root, bg=SURFACE, pady=6)
+        self.status_bar.pack(fill="x", side="bottom")
+        self.status_label = tk.Label(self.status_bar, textvariable=self.status_var,
+                                     font=("Arial", 9), bg=SURFACE, fg=AMBER)
+        self.status_label.pack(side="left", padx=16)
+        self.footer_label = tk.Label(self.status_bar, text="Built with Python & Tkinter",
+                                     font=("Arial", 8, "italic"), bg=SURFACE, fg="#37474F")
+        self.footer_label.pack(side="right", padx=16)
 
     # ================================================================== #
     #                       UI HELPERS                                   #
@@ -669,13 +745,15 @@ class TaskSchedulerApp:
         self.tree.delete(*self.tree.get_children())
         active_count = 0
         for t in self.tasks:
-            status = "Active" if (t.enabled and t.id in self.jobs) else (
-                "Enabled" if t.enabled else "Disabled")
-            if t.enabled and t.id in self.jobs:
+            if not t.enabled:
+                status = "⏸ Paused"
+            elif t.id in self.jobs:
+                status = "▶ Active"
                 active_count += 1
+            else:
+                status = "● Idle"
             self.tree.insert("", "end", iid=t.id, values=(
-                t.name, t.task_type, t.display_schedule(),
-                "Yes" if t.versioned else "No", status))
+                t.name, t.task_type, t.display_schedule(), status))
         self.status_var.set(f"{len(self.tasks)} tasks | {active_count} active")
 
     def _get_selected_task(self) -> Optional[TaskConfig]:
@@ -714,14 +792,11 @@ class TaskSchedulerApp:
             return
         dlg = TaskDialog(self.root, title="Edit Task", task=task)
         if dlg.result:
-            # Unschedule old
             self._unschedule_task(task.id)
-            # Replace in list
             for i, t in enumerate(self.tasks):
                 if t.id == task.id:
                     self.tasks[i] = dlg.result
                     break
-            # Re-schedule
             if dlg.result.enabled:
                 self._schedule_task(dlg.result)
             self._save_and_refresh()
@@ -747,10 +822,10 @@ class TaskSchedulerApp:
         task.enabled = not task.enabled
         if task.enabled:
             self._schedule_task(task)
-            self._append_log(f"✅ Enabled '{task.name}'")
+            self._append_log(f"▶ Resumed '{task.name}'")
         else:
             self._unschedule_task(task.id)
-            self._append_log(f"⏸ Disabled '{task.name}'")
+            self._append_log(f"⏸ Paused '{task.name}'")
         self._save_and_refresh()
 
     def _run_selected_now(self):
@@ -761,6 +836,7 @@ class TaskSchedulerApp:
         threading.Thread(target=self._perform_task, args=(task,), daemon=True).start()
 
     def _save_and_refresh(self):
+        self._save_tasks()
         self._refresh_tree()
 
     # ================================================================== #
@@ -770,7 +846,7 @@ class TaskSchedulerApp:
     def _schedule_task(self, task: TaskConfig):
         if not task.enabled:
             return
-        self._unschedule_task(task.id)  # clear old jobs first
+        self._unschedule_task(task.id)
 
         jobs = []
         try:
@@ -846,46 +922,19 @@ class TaskSchedulerApp:
     # ================================================================== #
 
     def _perform_task(self, task: TaskConfig):
-        """Execute the actual file copy / folder backup. Runs in background thread."""
-        is_file = task.task_type == "File Copy"
-
-        # --- Disk space check ---
-        has_space, needed, available = check_disk_space(task.source, task.destination, is_file)
-        if not has_space:
-            err = (f"Not enough disk space for '{task.name}'!\n"
-                   f"Needed: {format_bytes(needed)} | Available: {format_bytes(available)}")
-            logger.warning(err)
-            self.root.after(0, lambda: self._append_log(f"⚠️ {err}"))
-            send_notification("Disk Space Warning", err)
-            return
-
+        """Execute the task operation. Runs in a background thread."""
         try:
-            if is_file:
-                # File copy
-                if task.versioned:
-                    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    base = os.path.splitext(os.path.basename(task.source))
-                    versioned_name = f"{base[0]}_{ts}{base[1]}"
-                    final_dest = os.path.join(task.destination, versioned_name)
-                    shutil.copy2(task.source, final_dest)
-                    msg = f"File copied → {final_dest}"
-                else:
-                    shutil.copy2(task.source, task.destination)
-                    msg = f"File copied → {task.destination}"
-            else:
-                # Folder backup
-                folder_name = os.path.basename(task.source)
-                if task.versioned:
-                    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    folder_name = f"{folder_name}_{ts}"
-                final_dest = os.path.join(task.destination, folder_name)
-                shutil.copytree(task.source, final_dest, dirs_exist_ok=True)
-                msg = f"Backup created → {final_dest}"
+            if task.task_type == "File Copy":
+                self._exec_file_copy(task)
 
-            logger.info(f"[{task.name}] {msg}")
-            self.root.after(0, lambda: self._append_log(f"✅ [{task.name}] {msg}"))
-            self.root.after(0, lambda: self.status_var.set(f"Last: {task.name} ✓"))
-            send_notification(f"✅ {task.name}", msg)
+            elif task.task_type == "Folder Backup":
+                self._exec_folder_backup(task)
+
+            elif task.task_type == "Move File":
+                self._exec_move_file(task)
+
+            else:
+                raise ValueError(f"Unknown task type: {task.task_type}")
 
         except Exception as e:
             err = f"[{task.name}] Failed: {e}"
@@ -893,45 +942,180 @@ class TaskSchedulerApp:
             self.root.after(0, lambda: self._append_log(f"❌ {err}"))
             send_notification(f"❌ {task.name}", str(e))
 
+    # ---- Individual operation handlers ----
+
+    def _exec_file_copy(self, task: TaskConfig):
+        has_space, needed, available = check_disk_space(task.source, task.destination, True)
+        if not has_space:
+            self._disk_space_warning(task, needed, available)
+            return
+        shutil.copy2(task.source, task.destination)
+        msg = f"File copied → {task.destination}"
+        self._task_success(task, msg)
+
+    def _exec_folder_backup(self, task: TaskConfig):
+        has_space, needed, available = check_disk_space(task.source, task.destination, False)
+        if not has_space:
+            self._disk_space_warning(task, needed, available)
+            return
+        folder_name = os.path.basename(task.source)
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        final_dest = os.path.join(task.destination, f"{folder_name}_{ts}")
+        shutil.copytree(task.source, final_dest, dirs_exist_ok=True)
+        msg = f"Backup created → {final_dest}"
+        self._task_success(task, msg)
+
+    def _exec_move_file(self, task: TaskConfig):
+        if not os.path.isfile(task.source):
+            raise FileNotFoundError(f"Source file not found: {task.source}")
+        shutil.move(task.source, task.destination)
+        msg = f"File moved → {task.destination}"
+        self._task_success(task, msg)
+
+
+
+    # ---- Shared result helpers ----
+
+    def _task_success(self, task: TaskConfig, msg: str):
+        logger.info(f"[{task.name}] {msg}")
+        self.root.after(0, lambda: self._append_log(f"✅ [{task.name}] {msg}"))
+        self.root.after(0, lambda: self.status_var.set(f"Last: {task.name} ✓"))
+        send_notification(f"✅ {task.name}", msg)
+
+    def _disk_space_warning(self, task: TaskConfig, needed: int, available: int):
+        err = (f"Not enough disk space for '{task.name}'!\n"
+               f"Needed: {format_bytes(needed)} | Available: {format_bytes(available)}")
+        logger.warning(err)
+        self.root.after(0, lambda: self._append_log(f"⚠️ {err}"))
+        send_notification("Disk Space Warning", err)
+
+    # ================================================================== #
+    #               PERSISTENCE (config.json)                            #
+    # ================================================================== #
+
     def _load_tasks(self):
+        """Load tasks and theme from config.json."""
         self.tasks = []
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                # Load tasks
+                for t_dict in data.get("tasks", []):
+                    try:
+                        task = TaskConfig(
+                            id=t_dict.get("id", ""),
+                            name=t_dict.get("name", ""),
+                            task_type=t_dict.get("task_type", "File Copy"),
+                            source=t_dict.get("source", ""),
+                            destination=t_dict.get("destination", ""),
+                            schedule_type=t_dict.get("schedule_type", "Daily"),
+                            time_hour=t_dict.get("time_hour", "12"),
+                            time_minute=t_dict.get("time_minute", "00"),
+                            time_ampm=t_dict.get("time_ampm", "AM"),
+                            weekly_days=t_dict.get("weekly_days", ["Mon"]),
+                            interval_minutes=t_dict.get("interval_minutes", 30),
+                            enabled=t_dict.get("enabled", True),
+                        )
+                        self.tasks.append(task)
+                    except Exception as e:
+                        logger.warning(f"Skipping malformed task entry: {e}")
+
+                # Load theme preference
+                saved_theme = data.get("theme", "dark")
+                if saved_theme != self.current_theme:
+                    self.current_theme = saved_theme
+                    _apply_global_theme(saved_theme)
+                    self._apply_theme()
+
+                logger.info(f"Loaded {len(self.tasks)} tasks from config.json")
+                self._append_log(f"📂 Loaded {len(self.tasks)} task(s) from config")
+        except json.JSONDecodeError as e:
+            logger.error(f"Config file is corrupted: {e}")
+            self._append_log("⚠️ Config file corrupted — starting fresh")
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+
+        # Schedule all enabled tasks
+        for task in self.tasks:
+            if task.enabled:
+                self._schedule_task(task)
+
         self._refresh_tree()
 
+    def _save_tasks(self):
+        """Persist tasks and theme to config.json."""
+        try:
+            data = {
+                "theme": self.current_theme,
+                "tasks": [asdict(t) for t in self.tasks],
+            }
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved {len(self.tasks)} tasks to config.json")
+        except Exception as e:
+            logger.error(f"Failed to save config: {e}")
+            self.root.after(0, lambda: self._append_log(f"❌ Save error: {e}"))
+
     # ================================================================== #
-    #                      SYSTEM TRAY                                   #
+    #                    THEME SWITCHING                                  #
     # ================================================================== #
 
-    def _minimize_to_tray(self):
-        if not HAS_TRAY:
-            return
-        self.root.withdraw()
-        self._hidden = True
+    def _toggle_theme(self):
+        """Switch between dark and light themes."""
+        new_theme = "light" if self.current_theme == "dark" else "dark"
+        self.current_theme = new_theme
+        _apply_global_theme(new_theme)
+        self._apply_theme()
+        self._save_tasks()
+        self._append_log(f"🎨 Switched to {new_theme} theme")
 
-        icon_img = create_tray_icon_image()
-        menu = pystray.Menu(
-            pystray.MenuItem("Show", self._restore_from_tray, default=True),
-            pystray.MenuItem("Start All", lambda: self.root.after(0, self._start_all)),
-            pystray.MenuItem("Stop All", lambda: self.root.after(0, self._stop_all)),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Exit", self._tray_exit),
-        )
-        self.tray_icon = pystray.Icon("TaskScheduler", icon_img,
-                                       "Task Scheduler", menu)
-        threading.Thread(target=self.tray_icon.run, daemon=True).start()
-        send_notification("Task Scheduler", "Minimized to system tray")
-        logger.info("Minimized to system tray")
+    def _apply_theme(self):
+        """Reconfigure all widgets to match the current theme."""
+        self.root.configure(bg=BG)
 
-    def _restore_from_tray(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-            self.tray_icon = None
-        self.root.after(0, self.root.deiconify)
-        self._hidden = False
+        # Header
+        self.hdr_frame.configure(bg=SURFACE)
+        self.hdr_icon.configure(bg=SURFACE, fg=TEXT)
+        self.hdr_title.configure(bg=SURFACE, fg=TEXT)
 
-    def _tray_exit(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-        self.root.after(0, self._on_close)
+        # Toolbar
+        self.toolbar.configure(bg=BG)
+
+        # Theme button label
+        if self.current_theme == "dark":
+            self.theme_btn.config(text="☀️  Light")
+        else:
+            self.theme_btn.config(text="🌙  Dark")
+
+        # Tree frame
+        self.tree_frame.configure(bg=BG)
+
+        # Treeview style
+        self.style.configure("Task.Treeview",
+                             background=TREEVIEW_BG, foreground=TREEVIEW_FG,
+                             fieldbackground=TREEVIEW_BG)
+        self.style.configure("Task.Treeview.Heading",
+                             background=HEADER_BG, foreground=TEXT)
+        self.style.map("Task.Treeview",
+                       background=[("selected", TREEVIEW_SEL)],
+                       foreground=[("selected", TEXT)])
+
+        # Context menu
+        self.ctx_menu.configure(bg=CARD, fg=TEXT, activebackground=ACCENT)
+
+        # Log area
+        self.log_lbl_frame.configure(bg=BG)
+        self.log_lbl.configure(bg=BG, fg=TEXT_SEC)
+        self.log_frame.configure(bg=LOG_BG)
+        self.log_text.configure(bg=LOG_BG, fg=TEXT_SEC)
+
+        # Status bar
+        self.status_bar.configure(bg=SURFACE)
+        self.status_label.configure(bg=SURFACE, fg=AMBER)
+        self.footer_label.configure(bg=SURFACE,
+                                    fg="#546E7A" if self.current_theme == "light" else "#37474F")
 
     # ================================================================== #
     #                    SCHEDULER THREAD                                 #
@@ -946,6 +1130,7 @@ class TaskSchedulerApp:
         logger.info("Scheduler thread started.")
 
     def _on_close(self):
+        self._save_tasks()
         logger.info("Application closed.")
         self.root.destroy()
 
